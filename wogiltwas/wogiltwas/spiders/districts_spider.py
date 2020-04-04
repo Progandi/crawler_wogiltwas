@@ -2,7 +2,6 @@ from dataclasses import Field, field
 import scrapy
 from scrapy import Item
 from selenium import webdriver
-from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 
 
@@ -13,21 +12,26 @@ class DistrictSpider(scrapy.Spider):
         self.start_urls = ['http://www.kreisnavigator.de/kreisnavigator/frmalps.htm']
 
         options = webdriver.ChromeOptions()
-        options.add_argument('--disable-extensions')
-        options.add_argument('--headless')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--no-sandbox')
+        options.add_argument("start-maximized")
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
         self.driver = webdriver.Chrome(ChromeDriverManager().install(), chrome_options=options)
-        self.driver.implicitly_wait(2)
+        self.driverDistricts = webdriver.Chrome(ChromeDriverManager().install(), chrome_options=options)
+        self.driverResults = webdriver.Chrome(ChromeDriverManager().install(), chrome_options=options)
 
     def parse(self, response):
         self.driver.get(response.url)
         self.driver.switch_to.frame("brdalphs")
-        items = self.extract_items()
+        items = self.extract_district_items()
         self.driver.close()
-        return items
+        for item in items:
+            self.log('Current Website: ' + item.get('url'));
+            item = self.extract_url_items(item)
+        logfile = open("logfile.txt", "a")
+        logfile.write(str(items))
+        logfile.close()
 
-    def extract_items(self):
+    def extract_district_items(self):
         extracted_districts_a = self.driver.find_elements_by_xpath('//table/tbody//a')
 
         items = []
@@ -39,6 +43,43 @@ class DistrictSpider(scrapy.Spider):
 
         return items
 
+    def extract_url_items(self, item):
+        self.driverDistricts.get(item.get('url'))
+
+        # TODO include landing page analytics
+        # self.analyse_results(item, item.get('url'))
+
+        item['suburls'] = self.driverDistricts.find_elements_by_xpath('//body//a[contains(@href,"corona")]')
+
+        for suburl in item['suburls']:
+            item = self.analyse_results(item, suburl.get_attribute('href'))
+            if item.get('pdflink') != '':
+                break
+
+            # backup code
+            # suburlnodes = suburl.find_elements_by_xpath("/descendant::*")
+            # for suburlnode in suburlnodes:
+            #     if suburlnode.text.find("Corona") != -1:
+            #         self.log(suburlnode.text)
+            #         self.log(suburl.get_attribute('href'))
+            #         break
+        self.driverDistricts.close()
+
+        return item
+
+    def analyse_results(self, item, url):
+        self.driverResults.get(url)
+        pdfitems = self.driverResults.find_elements_by_xpath('//a[contains(@href, ".pdf")]')
+        item['pdflinks'] = []
+        for pdfitem in pdfitems:
+            item['pdflinks'].append(pdfitem.get_attribute("href"))
+
+        self.driverResults.close()
+
+        return item
+
     class DistrictItem(Item):
         url = scrapy.Field()
         name = scrapy.Field()
+        suburls = scrapy.Field()
+        pdflinks = scrapy.Field()
